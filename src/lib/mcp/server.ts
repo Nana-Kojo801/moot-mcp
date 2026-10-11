@@ -3,6 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { WEEKDAYS } from "../clock";
+import OpenAI from "openai";
 import { AiUnavailableError } from "../ai";
 import { BudgetError, RISEN_MESSAGE } from "../usage";
 import { env } from "../env";
@@ -44,10 +45,10 @@ async function respond(fn: () => Promise<house.Result>): Promise<CallToolResult>
     } else if (err instanceof BudgetError) {
       result = { ok: false, budget_exhausted: true, spoken: RISEN_MESSAGE };
     } else if (err instanceof AiUnavailableError) {
-      result = {
-        ok: false,
-        spoken: "The Clerk cannot draft or rule right now because the server has no AI key configured.",
-      };
+      result = { ok: false, spoken: err.message };
+    } else if (err instanceof OpenAI.APIError) {
+      console.error("[moot] AI provider error", err.status, err.message);
+      result = { ok: false, spoken: "The Clerk's drafting service did not answer. Try again in a moment." };
     } else {
       console.error("[moot] tool failed", err);
       result = { ok: false, spoken: "The House records could not be reached. Please try again in a moment." };

@@ -16,13 +16,16 @@ let openai: OpenAI | null = null;
 function client(): OpenAI {
   if (!openai) {
     if (!process.env.OPENAI_API_KEY) {
-      throw new AiUnavailableError("OPENAI_API_KEY is not set on the server.");
+      throw new AiUnavailableError(
+        "The Clerk cannot draft or rule right now because the server has no AI key configured.",
+      );
     }
     openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, maxRetries: 1, timeout: 25_000 });
   }
   return openai;
 }
 
+/** The AI could not be used; the message is safe to speak. */
 export class AiUnavailableError extends Error {
   constructor(message: string) {
     super(message);
@@ -35,19 +38,47 @@ export function truncate(text: string, max: number): string {
   return clean.length > max ? clean.slice(0, max) : clean;
 }
 
+let reasoningRejected = false;
+
 function reasoningParams(): { reasoning_effort?: "none" | "minimal" | "low" | "medium" } {
   const effort = process.env.OPENAI_REASONING_EFFORT ?? "low";
-  if (effort === "off" || effort === "") return {};
+  if (reasoningRejected || effort === "off" || effort === "") return {};
   return { reasoning_effort: effort as "low" };
 }
+
+type CompletionParams = Parameters<OpenAI["chat"]["completions"]["create"]>[0] & { stream?: false };
+
+/** One chat completion. If the model rejects reasoning_effort, retry once without it and remember. */
+async function complete(params: CompletionParams) {
+  try {
+    return await client().chat.completions.create(params);
+  } catch (err) {
+    if (
+      !reasoningRejected &&
+      "reasoning_effort" in params &&
+      err instanceof OpenAI.APIError &&
+      err.status === 400 &&
+      /reasoning/i.test(err.message)
+    ) {
+      reasoningRejected = true;
+      const { reasoning_effort: _ignored, ...rest } = params;
+      void _ignored;
+      return client().chat.completions.create(rest);
+    }
+    throw err;
+  }
+}
+
+// Keywords OpenAI's strict mode does not accept. Lengths are enforced after parsing instead.
+const UNSUPPORTED_KEYWORDS = ["$schema", "minLength", "maxLength", "format"];
 
 /** OpenAI strict JSON schema mode wants every property required and no extras. */
 function strictJsonSchema(schema: z.ZodType): Record<string, unknown> {
   const json = z.toJSONSchema(schema, { target: "draft-7" }) as Record<string, unknown>;
-  delete json.$schema;
   const visit = (node: unknown) => {
     if (!node || typeof node !== "object") return;
     const n = node as Record<string, unknown>;
+    for (const k of UNSUPPORTED_KEYWORDS) delete n[k];
     if (n.type === "object" && n.properties && typeof n.properties === "object") {
       n.required = Object.keys(n.properties as object);
       n.additionalProperties = false;
@@ -71,7 +102,7 @@ async function callJson<T>(
   let lastError: unknown = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     await claimAiCall(scope);
-    const res = await client().chat.completions.create({
+    const res = await complete({
       model: env.openaiModel,
       ...reasoningParams(),
       max_completion_tokens: 2000,
@@ -93,7 +124,8 @@ async function callJson<T>(
       lastError = err;
     }
   }
-  throw new Error(`The AI returned an unexpected answer: ${String(lastError).slice(0, 200)}`);
+  console.error("[moot] AI output rejected", String(lastError).slice(0, 300));
+  throw new AiUnavailableError("The Clerk could not make sense of that. Please say it another way.");
 }
 
 const SAFETY = `Moot is a family game. Everything you write must be family-friendly.
@@ -103,9 +135,9 @@ Never allow a penalty involving physical punishment, withholding food or drink, 
 // ---------- draftBill ----------
 
 const DraftSchema = z.object({
-  title: z.string().min(3).max(80),
-  statute_text: z.string().min(5).max(400),
-  penalty: z.string().max(200).nullable(),
+  title: z.string(),
+  statute_text: z.string(),
+  penalty: z.string().nullable(),
   schedule: z
     .object({
       type: z.enum(["standing", "weekly", "daily"]),
@@ -113,9 +145,9 @@ const DraftSchema = z.object({
       time: z.string().nullable(),
     })
     .nullable(),
-  expires_in_days: z.number().int().min(1).max(3650).nullable(),
-  clarifying_question: z.string().max(200).nullable(),
-  safety_flag: z.string().max(200).nullable(),
+  expires_in_days: z.number().int().nullable(),
+  clarifying_question: z.string().nullable(),
+  safety_flag: z.string().nullable(),
 });
 
 export interface Draft {
@@ -158,7 +190,19 @@ Rules:
   const user = `Proposer: ${ctx.proposerName} (${ctx.proposerKind}).
 Idea: ${truncate(idea, 400)}${ctx.penalty ? `\nPenalty they asked for: ${truncate(ctx.penalty, 200)}` : ""}`;
   const out = await callJson(ctx.scope, "draft_bill", DraftSchema, system, user);
-  return { ...out, schedule: normalizeSchedule(out.schedule) };
+  const days = out.expires_in_days;
+  if (!out.clarifying_question && (out.title.trim().length < 3 || out.statute_text.trim().length < 5)) {
+    out.clarifying_question = "What exactly should the new rule say?";
+  }
+  return {
+    title: truncate(out.title, 80),
+    statute_text: truncate(out.statute_text, 400),
+    penalty: out.penalty ? truncate(out.penalty, 200) : null,
+    schedule: normalizeSchedule(out.schedule),
+    expires_in_days: days && days >= 1 && days <= 3650 ? days : null,
+    clarifying_question: out.clarifying_question ? truncate(out.clarifying_question, 200) : null,
+    safety_flag: out.safety_flag ? truncate(out.safety_flag, 200) : null,
+  };
 }
 
 // ---------- interpretRule ----------
@@ -166,7 +210,7 @@ Idea: ${truncate(idea, 400)}${ctx.penalty ? `\nPenalty they asked for: ${truncat
 const RulingSchema = z.object({
   applies: z.boolean(),
   law_id: z.string().nullable(),
-  ruling: z.string().min(1).max(400),
+  ruling: z.string().min(1),
 });
 export type Ruling = z.infer<typeof RulingSchema>;
 
@@ -197,12 +241,13 @@ Plain sentences only, no markdown, no lists.`;
     )
     .join("\n");
   const user = `Laws in force:\n${lawText}\n\n${askedBy} asks: ${truncate(question, 300)}`;
-  return callJson(scope, "rule_check", RulingSchema, system, user);
+  const out = await callJson(scope, "rule_check", RulingSchema, system, user);
+  return { ...out, ruling: cleanSpoken(truncate(out.ruling, 400)) };
 }
 
 // ---------- writeReminder ----------
 
-const ReminderSchema = z.object({ spoken: z.string().min(1).max(300) });
+const ReminderSchema = z.object({ spoken: z.string().min(1) });
 
 export async function writeReminder(
   scope: string,
@@ -213,7 +258,7 @@ export async function writeReminder(
 ${SAFETY}`;
   const user = `Act no. ${law.number}: ${law.title}. Text: ${law.statute_text}${law.penalty ? ` Penalty: ${law.penalty}` : ""}\nDue: ${dueDescription}`;
   const out = await callJson(scope, "reminder", ReminderSchema, system, user);
-  return out.spoken;
+  return cleanSpoken(truncate(out.spoken, 300));
 }
 
 // ---------- agentTurn ----------
@@ -247,13 +292,19 @@ export interface AgentTurnResult {
 
 const MAX_TOOL_CALLS = 4;
 
+function withoutSchemaKey(schema: Record<string, unknown>): Record<string, unknown> {
+  const { $schema: _drop, ...rest } = schema;
+  void _drop;
+  return rest;
+}
+
 export async function agentTurn(input: AgentTurnInput): Promise<AgentTurnResult> {
   const tools: ChatCompletionTool[] = input.tools.map((t) => ({
     type: "function",
     function: {
       name: t.name,
       description: (t.description ?? "").slice(0, 1000),
-      parameters: t.inputSchema,
+      parameters: withoutSchemaKey(t.inputSchema),
     },
   }));
 
@@ -280,7 +331,7 @@ If the member says something that is not parliamentary business, answer briefly 
       }
       throw err;
     }
-    const res = await client().chat.completions.create({
+    const res = await complete({
       model: env.openaiModel,
       ...reasoningParams(),
       max_completion_tokens: 2000,

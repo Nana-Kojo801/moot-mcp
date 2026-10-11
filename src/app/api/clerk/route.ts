@@ -1,5 +1,6 @@
 // The simulated voice assistant: one utterance in, one spoken reply out.
 // The AI chooses tools from the MCP server's tools/list and every tool runs through the MCP client.
+import OpenAI from "openai";
 import { agentTurn, AiUnavailableError, cleanSpoken, truncate } from "@/lib/ai";
 import { all } from "@/lib/db";
 import { HouseError, loadHouse } from "@/lib/house";
@@ -89,8 +90,10 @@ export async function POST(req: Request) {
   } catch (err) {
     if (err instanceof BudgetError) return Response.json({ reply: RISEN_MESSAGE, steps: [], budget_exhausted: true });
     if (err instanceof HouseError) return errorJson(404, err.message);
-    if (err instanceof AiUnavailableError) {
-      return errorJson(503, "The Clerk is offline: the server has no OPENAI_API_KEY. Add it and redeploy.");
+    if (err instanceof AiUnavailableError) return errorJson(503, err.message);
+    if (err instanceof OpenAI.APIError) {
+      console.error("[moot] AI provider error", err.status, err.message);
+      return errorJson(502, "The Clerk's AI service did not answer. Try again in a moment.");
     }
     console.error("[moot] clerk", err);
     return errorJson(502, "The Clerk could not reach the House. Check your connection and try again.");
