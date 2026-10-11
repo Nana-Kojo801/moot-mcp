@@ -1,0 +1,16 @@
+:root {
+  --bench: #1e4d3b;
+  --paper: #e6ede8;
+  --ink: #101a16;
+  --chalk: #eaf2ec;
+  --brass: #c9a227;
+  --stamp: #c0262c;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--bench);
+  color: var(--chalk);
+  font-family: system-ui, sans-serif;
+}
