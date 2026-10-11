@@ -8,7 +8,7 @@ import type {
 import { z } from "zod";
 import { env } from "./env";
 import { WEEKDAYS } from "./clock";
-import { claimAiCall } from "./usage";
+import { BudgetError, claimAiCall, RISEN_MESSAGE } from "./usage";
 import type { Schedule } from "./types";
 
 let openai: OpenAI | null = null;
@@ -242,6 +242,7 @@ export interface AgentTurnInput {
 export interface AgentTurnResult {
   reply: string;
   steps: ToolStep[];
+  budgetExhausted?: boolean;
 }
 
 const MAX_TOOL_CALLS = 4;
@@ -270,7 +271,15 @@ If the member says something that is not parliamentary business, answer briefly 
 
   for (let round = 0; round < MAX_TOOL_CALLS + 1; round++) {
     const allowTools = steps.length < MAX_TOOL_CALLS;
-    await claimAiCall(input.scope);
+    try {
+      await claimAiCall(input.scope);
+    } catch (err) {
+      // Out of budget midway: report what was already done instead of losing it.
+      if (err instanceof BudgetError && steps.length > 0) {
+        return { reply: `${fallbackReply(steps)} ${RISEN_MESSAGE}`, steps, budgetExhausted: true };
+      }
+      throw err;
+    }
     const res = await client().chat.completions.create({
       model: env.openaiModel,
       ...reasoningParams(),

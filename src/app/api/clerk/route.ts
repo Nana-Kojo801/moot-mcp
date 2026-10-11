@@ -76,6 +76,7 @@ export async function POST(req: Request) {
     );
     return Response.json({
       reply: cleanSpoken(result.reply),
+      budget_exhausted: result.budgetExhausted === true,
       steps: result.steps.map((s) => ({
         name: s.name,
         args: s.args,

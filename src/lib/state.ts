@@ -71,7 +71,15 @@ export async function getState(householdId: string) {
     };
   };
 
-  const featured = bills.find((b) => b.status !== "withdrawn") ?? null;
+  // The Order Paper shows the bill in progress, or one closed in the last few hours of house time.
+  const recent = 6 * 60 * 60 * 1000;
+  const featured =
+    bills.find(
+      (b) =>
+        b.status === "debate" ||
+        b.status === "voting" ||
+        (b.status !== "withdrawn" && b.closed_at !== null && now - b.closed_at < recent),
+    ) ?? null;
   return {
     demoMode: env.demoMode,
     household: {
