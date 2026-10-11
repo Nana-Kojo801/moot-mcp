@@ -1,0 +1,98 @@
+// The rules of the House. Pure functions, no database, fully unit tested.
+import { localDayNumber } from "./clock";
+import type { BillKind, Choice, MemberKind } from "./types";
+
+export interface SeatedMember {
+  id: string;
+  kind: MemberKind;
+  seat: number;
+}
+
+/** The Speaker rotates weekly (Monday to Sunday) through the members in seat order. */
+export function speakerFor<T extends SeatedMember>(members: T[], nowMs: number, tz: string): T | null {
+  if (members.length === 0) return null;
+  const ordered = [...members].sort((a, b) => a.seat - b.seat);
+  const week = Math.floor(localDayNumber(nowMs, tz) / 7);
+  const index = ((week % ordered.length) + ordered.length) % ordered.length;
+  return ordered[index];
+}
+
+export interface TallyInput {
+  kind: BillKind;
+  members: { id: string }[];
+  votes: { member_id: string; choice: Choice }[];
+  speakerId: string | null;
+  proposerKind: MemberKind;
+  assentRequired: boolean;
+}
+
+export type Outcome = "no_quorum" | "defeated" | "enacted" | "awaiting_assent";
+
+export interface TallyResult {
+  ayes: number;
+  nays: number;
+  abstains: number;
+  turnout: number;
+  memberCount: number;
+  quorum: boolean;
+  /** How many more members must vote before quorum is reached. */
+  shortOfQuorum: number;
+  passed: boolean;
+  tieBrokenBySpeaker: boolean;
+  threshold: "simple" | "two_thirds";
+  outcome: Outcome;
+}
+
+/** Quorum: more than half of the members have voted (abstaining counts as voting). */
+export function quorumNeeded(memberCount: number): number {
+  return Math.floor(memberCount / 2) + 1;
+}
+
+export function tally(input: TallyInput): TallyResult {
+  const memberIds = new Set(input.members.map((m) => m.id));
+  const counted = input.votes.filter((v) => memberIds.has(v.member_id));
+  const ayes = counted.filter((v) => v.choice === "aye").length;
+  const nays = counted.filter((v) => v.choice === "nay").length;
+  const abstains = counted.filter((v) => v.choice === "abstain").length;
+  const turnout = counted.length;
+  const memberCount = memberIds.size;
+  const needed = quorumNeeded(memberCount);
+  const quorum = memberCount > 0 && turnout >= needed;
+  const threshold = input.kind === "amend" ? "two_thirds" : "simple";
+
+  let passed = false;
+  let tieBrokenBySpeaker = false;
+  if (quorum && ayes > 0) {
+    if (threshold === "two_thirds") {
+      passed = ayes * 3 >= (ayes + nays) * 2;
+    } else if (ayes > nays) {
+      passed = true;
+    } else if (ayes === nays) {
+      const speakerAye = counted.some(
+        (v) => v.member_id === input.speakerId && v.choice === "aye",
+      );
+      passed = speakerAye;
+      tieBrokenBySpeaker = speakerAye;
+    }
+  }
+
+  let outcome: Outcome;
+  if (!quorum) outcome = "no_quorum";
+  else if (!passed) outcome = "defeated";
+  else if (input.assentRequired && input.proposerKind === "child") outcome = "awaiting_assent";
+  else outcome = "enacted";
+
+  return {
+    ayes,
+    nays,
+    abstains,
+    turnout,
+    memberCount,
+    quorum,
+    shortOfQuorum: Math.max(0, needed - turnout),
+    passed,
+    tieBrokenBySpeaker,
+    threshold,
+    outcome,
+  };
+}

@@ -6,7 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "db:setup": "tsx --env-file-if-exists=.env.local scripts/db-setup.ts"
   },
   "dependencies": {
     "@libsql/client": "^0.18.0",
