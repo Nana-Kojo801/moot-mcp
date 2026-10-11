@@ -56,3 +56,17 @@ export function newId(prefix: string): string {
   const s = Array.from(bytes, (b) => b.toString(36).padStart(2, "0")).join("").slice(0, 10);
   return `${prefix}_${s}`;
 }
+
+let schemaReady: Promise<void> | null = null;
+
+/** Applies the schema once per server process (all statements are idempotent). */
+export function ensureSchema(): Promise<void> {
+  schemaReady ??= import("./schema")
+    .then(({ SCHEMA }) => db().batch(SCHEMA, "write"))
+    .then(() => undefined)
+    .catch((err) => {
+      schemaReady = null;
+      throw err;
+    });
+  return schemaReady;
+}
