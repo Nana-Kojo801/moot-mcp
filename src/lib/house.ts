@@ -129,7 +129,7 @@ async function votesFor(billId: string): Promise<Vote[]> {
   return all<Vote>(`SELECT * FROM votes WHERE bill_id = ?`, [billId]);
 }
 
-function describeSchedule(s: Schedule | null): string | null {
+export function describeSchedule(s: Schedule | null): string | null {
   if (!s) return null;
   if (s.type === "standing") return "Standing law, always in force";
   const t = parseTime(s.time);
