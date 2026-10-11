@@ -909,6 +909,34 @@ button {
   accent-color: var(--bench);
 }
 
+.connect {
+  margin-top: 28px;
+  padding-top: 8px;
+  border-top: 1px solid var(--rule);
+  font-size: 0.88rem;
+}
+
+.connect h2 {
+  font-family: var(--slab);
+  font-size: 1.15rem;
+  margin: 8px 0 4px;
+}
+
+.connect dt {
+  font-weight: 600;
+  margin-top: 6px;
+}
+
+.connect dd {
+  margin: 2px 0 0;
+}
+
+.connect code {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  word-break: break-all;
+}
+
 .error {
   color: var(--stamp);
   font-weight: 600;

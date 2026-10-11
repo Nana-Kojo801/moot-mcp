@@ -1,10 +1,12 @@
 "use client";
+import { useRouter } from "next/navigation";
 import { HouseSetup } from "@/components/HouseSetup";
 import { Masthead } from "@/components/Masthead";
 import { useMoot } from "@/lib/client/useMoot";
 
 export default function HousePage() {
   const { state, status, error, refresh, startDemo } = useMoot();
+  const router = useRouter();
   return (
     <main className="shell">
       <Masthead />
@@ -16,7 +18,7 @@ export default function HousePage() {
       {status === "none" && (
         <p className="fineprint" style={{ marginTop: 16 }}>
           Or skip this and{" "}
-          <button type="button" className="linkish" onClick={() => void startDemo()}>
+          <button type="button" className="linkish" onClick={() => void startDemo().then(() => router.push("/"))}>
             use the demo household
           </button>
           .

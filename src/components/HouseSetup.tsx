@@ -146,6 +146,26 @@ export function HouseSetup({ state, onSaved }: { state: MootState | null; onSave
       <button type="button" className="btn btn--primary" onClick={save} disabled={busy}>
         {busy ? "Saving…" : "Save household"}
       </button>
+
+      {state && (
+        <div className="connect">
+          <h2>Connect an MCP client</h2>
+          <p>
+            The Clerk is a simulated voice assistant calling a real MCP server. Any MCP client can call the same
+            tools over Streamable HTTP.
+          </p>
+          <dl>
+            <dt>Endpoint</dt>
+            <dd>
+              <code>{typeof window === "undefined" ? "/api/mcp" : `${window.location.origin}/api/mcp`}</code>
+            </dd>
+            <dt>Header</dt>
+            <dd>
+              <code>x-moot-household: {state.household.id}</code>
+            </dd>
+          </dl>
+        </div>
+      )}
     </section>
   );
 }
