@@ -109,6 +109,8 @@ export function Chamber({
       setAnimateStamp(false);
       try {
         const res = await postJson<ClerkReply>("/api/clerk", { utterance: text, member_id: current.id });
+        res.steps ??= [];
+        if (!res.reply) throw new Error("The Clerk sent no reply. Try again.");
         const outcomes = res.steps.map((s) => s.outcome);
         await refresh();
         if (res.steps.some((s) => s.name === "call_vote" && s.ok)) playGavel();

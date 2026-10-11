@@ -26,8 +26,9 @@ export async function postJson<T>(url: string, body: unknown, method = "POST"): 
   } catch {
     throw new Error("The network is unreachable. Check your connection and try again.");
   }
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error ?? `The server answered ${res.status}. Try again.`);
+  const data = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(data?.error ?? `The server answered ${res.status}. Try again.`);
+  if (data === null) throw new Error("The server sent an empty answer. Try again.");
   return data as T;
 }
 
