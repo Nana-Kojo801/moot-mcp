@@ -1,6 +1,6 @@
 // Parliamentary business. Each exported function backs one MCP tool and returns
 // structured data plus a short `spoken` string for text-to-speech.
-import { all, batch, newId, one, run } from "./db";
+import { all, batch, ensureSchema, newId, one, run } from "./db";
 import {
   DAY_MS,
   WEEKDAYS,
@@ -15,7 +15,7 @@ import {
   type Weekday,
 } from "./clock";
 import { draftBill, interpretRule, truncate, writeReminder } from "./ai";
-import { speakerFor, tally } from "./parliament";
+import { speakerFor, successorOf, tally, weekNumber } from "./parliament";
 import { seedDemoHousehold } from "./seed";
 import { listNames, pick, plural, rollCall, ORDER } from "./templates";
 import {
@@ -62,6 +62,7 @@ export interface House {
 // ---------- loading ----------
 
 export async function loadHouse(householdId: string): Promise<House> {
+  await ensureSchema();
   const household = await one<Household>(`SELECT * FROM households WHERE id = ?`, [householdId]);
   if (!household) {
     throw new HouseError("No household was found. Open Moot and start the demo household first.");
@@ -73,11 +74,11 @@ export async function loadHouse(householdId: string): Promise<House> {
   const now = householdNow(household);
   const tz = household.timezone;
   await run(
-    `UPDATE laws SET status = 'expired'
+    `UPDATE laws SET status = 'expired', ended_at = expires_at
      WHERE household_id = ? AND status = 'in_force' AND expires_at IS NOT NULL AND expires_at <= ?`,
     [householdId, now],
   );
-  return { household, members, now, tz, speaker: speakerFor(members, now, tz) };
+  return { household, members, now, tz, speaker: speakerFor(members, now, tz, household) };
 }
 
 export function resolveMember(house: House, ref: string | undefined | null): Member {
@@ -108,6 +109,15 @@ async function openBill(householdId: string): Promise<Bill | null> {
   );
 }
 
+async function requireClearFloor(householdId: string) {
+  const existing = await openBill(householdId);
+  if (existing) {
+    throw new HouseError(
+      `The House is already considering ${existing.title}. Vote on it or withdraw it before bringing new business.`,
+    );
+  }
+}
+
 async function resolveBill(house: House, billId: string | undefined | null): Promise<Bill> {
   if (billId && billId.trim()) {
     const bill = await one<Bill>(`SELECT * FROM bills WHERE id = ? AND household_id = ?`, [
@@ -119,6 +129,35 @@ async function resolveBill(house: House, billId: string | undefined | null): Pro
   const current = await openBill(house.household.id);
   if (current) return current;
   throw new HouseError("There is no bill before the House. Propose one first.");
+}
+
+/** Finds a law in force by id, act number ("3", "Act 3") or title words. */
+async function resolveLaw(house: House, ref: string | number | undefined | null): Promise<Law> {
+  const laws = await all<Law>(
+    `SELECT * FROM laws WHERE household_id = ? AND status = 'in_force' ORDER BY number`,
+    [house.household.id],
+  );
+  const list = laws.map((l) => `Act ${l.number}, ${l.title}`).join("; ");
+  if (laws.length === 0) throw new HouseError("There are no laws in force to change.");
+  const raw = String(ref ?? "").trim();
+  if (!raw) throw new HouseError(`Say which law you mean. In force: ${list}.`);
+  const byId = laws.find((l) => l.id === raw);
+  if (byId) return byId;
+  const num = /^(?:act\s*(?:no\.?|number)?\s*)?(\d+)$/i.exec(raw);
+  if (num) {
+    const law = laws.find((l) => l.number === Number(num[1]));
+    if (law) return law;
+    throw new HouseError(`There is no Act ${num[1]} in force. In force: ${list}.`);
+  }
+  const words = (t: string) =>
+    t.toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter((w) => w && !["the", "act", "law", "of"].includes(w));
+  const want = words(raw);
+  const scored = laws
+    .map((l) => ({ l, hits: words(l.title).filter((w) => want.includes(w)).length }))
+    .filter((x) => x.hits > 0)
+    .sort((a, b) => b.hits - a.hits);
+  if (scored.length && (scored.length === 1 || scored[0].hits > scored[1].hits)) return scored[0].l;
+  throw new HouseError(`Which law do you mean? In force: ${list}.`);
 }
 
 function memberName(house: House, id: string): string {
@@ -163,6 +202,7 @@ export async function getHousehold(ctx: Ctx): Promise<Result> {
   );
   const current = await openBill(ctx.householdId);
   const speaker = house.speaker?.name ?? null;
+  const nextSpeaker = speakerFor(house.members, house.now + 7 * DAY_MS, house.tz)?.name ?? null;
   const laws = lawCount?.n ?? 0;
   const bills = pending?.n ?? 0;
   return {
@@ -170,6 +210,7 @@ export async function getHousehold(ctx: Ctx): Promise<Result> {
     household: house.household.name,
     members: house.members.map((m) => ({ id: m.id, name: m.name, kind: m.kind, seat: m.seat })),
     speaker,
+    next_speaker: nextSpeaker,
     parental_assent: house.household.assent_required === 1,
     laws_in_force: laws,
     bills_pending: bills,
@@ -194,12 +235,7 @@ export async function proposeBill(ctx: Ctx, args: ProposeArgs): Promise<Result> 
   const member = resolveMember(house, args.member);
   const idea = truncate(args.idea ?? "", 400);
   if (idea.length < 3) throw new HouseError("Say what the bill should do, for example: movie night every Friday.");
-  const existing = await openBill(ctx.householdId);
-  if (existing) {
-    throw new HouseError(
-      `The House is already considering ${existing.title}. Vote on it or withdraw it before proposing another bill.`,
-    );
-  }
+  await requireClearFloor(ctx.householdId);
   const titles = await all<{ title: string }>(
     `SELECT title FROM laws WHERE household_id = ? AND status = 'in_force'`,
     [ctx.householdId],
@@ -248,6 +284,7 @@ export async function proposeBill(ctx: Ctx, args: ProposeArgs): Promise<Result> 
     ],
   );
   const safety = safetyNote ? ` ${safetyNote}` : "";
+  const lapse = expiresAt ? ` It would lapse on ${formatDate(expiresAt, house.tz)}.` : "";
   return {
     ok: true,
     bill: {
@@ -260,7 +297,7 @@ export async function proposeBill(ctx: Ctx, args: ProposeArgs): Promise<Result> 
       status: "debate",
     },
     safety_note: safetyNote,
-    spoken: `${pick(ORDER)} ${member.name} has introduced ${draft.title}: ${draft.statute_text}${safety} The floor is open for debate.`,
+    spoken: `${pick(ORDER)} ${member.name} has introduced ${draft.title}: ${draft.statute_text}${safety}${lapse} The floor is open for debate.`,
   };
 }
 
@@ -302,7 +339,8 @@ export async function callVote(
     throw new HouseError(`The vote on ${bill.title} is already open. Members can say aye, nay, or abstain.`);
   }
   if (bill.status !== "debate") throw new HouseError(`${bill.title} is not in debate, so no vote can be called.`);
-  if (house.speaker && house.speaker.id !== member.id) {
+  // The Speaker cannot block a motion against themselves, so anyone may call that vote.
+  if (bill.kind !== "impeach" && house.speaker && house.speaker.id !== member.id) {
     throw new HouseError(`Only the Speaker can call the vote, and the Speaker this week is ${house.speaker.name}.`);
   }
   await run(`UPDATE bills SET status = 'voting', voting_opened_at = ? WHERE id = ?`, [house.now, bill.id]);
@@ -313,7 +351,7 @@ export async function callVote(
     ok: true,
     bill_id: bill.id,
     status: "voting",
-    spoken: `${pick(ORDER)} ${house.speaker ? "The Speaker" : member.name} calls the vote on ${bill.title}. Members, say aye, nay, or abstain.${noted}`,
+    spoken: `${pick(ORDER)} ${house.speaker?.id === member.id ? "The Speaker" : member.name} calls the vote on ${bill.title}. Members, say aye, nay, or abstain.${noted}`,
   };
 }
 
@@ -345,7 +383,7 @@ export async function castVote(
   const progress =
     bill.status === "debate"
       ? "It will count when the Speaker calls the vote."
-      : `${votes.length} of ${house.members.length} members have voted.`;
+      : `${votes.length} of ${house.members.length} members ${votes.length === 1 ? "has" : "have"} voted.`;
   return {
     ok: true,
     bill_id: bill.id,
@@ -356,7 +394,13 @@ export async function castVote(
   };
 }
 
-async function enact(house: House, bill: Bill): Promise<Law> {
+interface Enactment {
+  law: Law | null;
+  /** One spoken sentence describing what changed on the books. */
+  effect: string;
+}
+
+async function insertLaw(house: House, bill: Bill): Promise<Law> {
   const max = await one<{ n: number | null }>(`SELECT MAX(number) AS n FROM laws WHERE household_id = ?`, [
     house.household.id,
   ]);
@@ -372,34 +416,84 @@ async function enact(house: House, bill: Bill): Promise<Law> {
     enacted_at: house.now,
     expires_at: bill.expires_at,
     status: "in_force",
-    supersedes_law_id: bill.target_law_id,
+    supersedes_law_id: bill.kind === "amend" ? bill.target_law_id : null,
+    ended_at: null,
   };
-  await batch([
-    {
-      sql: `INSERT INTO laws (id, household_id, number, bill_id, title, statute_text, penalty, schedule_json,
-              enacted_at, expires_at, status, supersedes_law_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      args: [
-        law.id,
-        law.household_id,
-        law.number,
-        law.bill_id,
-        law.title,
-        law.statute_text,
-        law.penalty,
-        law.schedule_json,
-        law.enacted_at,
-        law.expires_at,
-        law.status,
-        law.supersedes_law_id,
-      ],
-    },
+  await run(
+    `INSERT INTO laws (id, household_id, number, bill_id, title, statute_text, penalty, schedule_json,
+       enacted_at, expires_at, status, supersedes_law_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      law.id,
+      law.household_id,
+      law.number,
+      law.bill_id,
+      law.title,
+      law.statute_text,
+      law.penalty,
+      law.schedule_json,
+      law.enacted_at,
+      law.expires_at,
+      law.status,
+      law.supersedes_law_id,
+    ],
+  );
+  return law;
+}
+
+/** Puts a passed bill into effect: a new law, an amended law, a repeal, or a change of Speaker. */
+async function enact(house: House, bill: Bill): Promise<Enactment> {
+  const stmts: { sql: string; args: (string | number | null)[] }[] = [
     {
       sql: `UPDATE bills SET status = 'enacted', awaiting_assent = 0, closed_at = COALESCE(closed_at, ?) WHERE id = ?`,
       args: [house.now, bill.id],
     },
-  ]);
-  return law;
+  ];
+  let result: Enactment;
+  const target = bill.target_law_id
+    ? await one<Law>(`SELECT * FROM laws WHERE id = ? AND household_id = ?`, [bill.target_law_id, house.household.id])
+    : null;
+
+  if (bill.kind === "impeach") {
+    // For an impeachment motion, target_law_id holds the id of the Speaker it was moved against.
+    const accused = house.members.find((m) => m.id === bill.target_law_id);
+    const successor = accused ? successorOf(house.members, accused.id) : null;
+    if (accused && successor && house.speaker?.id === accused.id) {
+      stmts.push({
+        sql: `UPDATE households SET speaker_override_id = ?, speaker_override_week = ? WHERE id = ?`,
+        args: [successor.id, weekNumber(house.now, house.tz), house.household.id],
+      });
+      result = {
+        law: null,
+        effect: `${accused.name} is impeached, and ${successor.name} takes the Speaker's chair until the week is out.`,
+      };
+    } else {
+      result = { law: null, effect: "The chair has already changed hands this week, so the motion has no further effect." };
+    }
+  } else if (bill.kind === "repeal") {
+    if (target && target.status === "in_force") {
+      stmts.push({
+        sql: `UPDATE laws SET status = 'repealed', ended_at = ? WHERE id = ?`,
+        args: [house.now, target.id],
+      });
+      result = { law: null, effect: `Act ${target.number}, ${target.title}, is repealed.` };
+    } else {
+      result = { law: null, effect: "That law was no longer in force, so nothing further changes." };
+    }
+  } else {
+    const law = await insertLaw(house, bill);
+    if (bill.kind === "amend" && target) {
+      stmts.push({
+        sql: `UPDATE laws SET status = 'repealed', ended_at = ? WHERE id = ? AND status = 'in_force'`,
+        args: [house.now, target.id],
+      });
+      result = { law, effect: `${law.title}, as amended, is enacted as Act number ${law.number}, replacing Act ${target.number}.` };
+    } else {
+      result = { law, effect: `${bill.title} is enacted as Act number ${law.number}.` };
+    }
+  }
+  await batch(stmts);
+  return result;
 }
 
 function lawSummary(law: Law, tz: string) {
@@ -466,14 +560,14 @@ export async function closeVote(ctx: Ctx, args: { bill_id?: string | null }): Pr
       t.ayes === t.nays && t.ayes > 0 && t.threshold === "simple"
         ? "The House is tied and the Speaker did not vote aye, so"
         : t.threshold === "two_thirds"
-          ? "An amendment needs two thirds, so"
+          ? "An amendment needs two thirds of the votes, so"
           : "The noes have it, and";
     return {
       ok: true,
       outcome: "defeated",
       bill_id: bill.id,
       tally: result,
-      spoken: `${roll} ${why} ${bill.title} is defeated.`,
+      spoken: `${roll} ${why} ${bill.kind === "impeach" ? "the motion fails and the Speaker keeps the chair" : `${bill.title} is defeated`}.`,
     };
   }
 
@@ -490,14 +584,15 @@ export async function closeVote(ctx: Ctx, args: { bill_id?: string | null }): Pr
     };
   }
 
-  const law = await enact(house, bill);
+  const done = await enact(house, bill);
   return {
     ok: true,
     outcome: "enacted",
     bill_id: bill.id,
+    kind: bill.kind,
     tally: result,
-    law: lawSummary(law, house.tz),
-    spoken: `${roll} ${carried} ${bill.title} is enacted as Act number ${law.number}.`,
+    law: done.law ? lawSummary(done.law, house.tz) : null,
+    spoken: `${roll} ${carried} ${done.effect}`,
   };
 }
 
@@ -522,13 +617,14 @@ export async function giveAssent(
   if (member.kind !== "adult") {
     throw new HouseError(`Only an adult can give Parental Assent, and ${member.name} is not one.`);
   }
-  const law = await enact(house, bill);
+  const done = await enact(house, bill);
   return {
     ok: true,
     outcome: "enacted",
     bill_id: bill.id,
-    law: lawSummary(law, house.tz),
-    spoken: `${member.name} gives assent. ${bill.title} is enacted as Act number ${law.number}.`,
+    kind: bill.kind,
+    law: done.law ? lawSummary(done.law, house.tz) : null,
+    spoken: `${member.name} gives assent. ${done.effect}`,
   };
 }
 
@@ -575,7 +671,7 @@ export async function listLaws(
       : `There ${laws.length === 1 ? "is" : "are"} ${plural(laws.length, "law", "laws")} ${label}: ${[...laws]
           .reverse()
           .slice(0, 6)
-          .map((l) => `Act ${l.number}, ${l.title}`)
+          .map((l) => `Act ${l.number}, ${l.title}${status === "all" && l.status !== "in_force" ? ` (${l.status === "expired" ? "lapsed" : "repealed"})` : ""}`)
           .join("; ")}.`;
   return { ok: true, laws: laws.map((l) => lawSummary(l, house.tz)), spoken };
 }
@@ -606,7 +702,7 @@ export async function checkRule(ctx: Ctx, args: { question: string; member: stri
       title: l.title,
       statute_text: l.statute_text,
       penalty: l.penalty,
-      enacted_on: formatDate(l.enacted_at, house.tz),
+      enacted_on: formatDate(l.enacted_at, house.tz) + (l.expires_at ? `; lapses ${formatDate(l.expires_at, house.tz)}` : ""),
     })),
   );
   const law = ruling.applies ? laws.find((l) => l.id === ruling.law_id) ?? null : null;
@@ -653,7 +749,7 @@ export async function getDueReminders(ctx: Ctx): Promise<Result> {
     [ctx.householdId, startOfDay, startOfDay + DAY_MS],
   );
   const done = new Set(reminded.map((r) => r.law_id));
-  const reminders: { law_number: number; title: string; due: string; spoken: string }[] = [];
+  const reminders: { law_number: number | null; title: string; due: string; spoken: string }[] = [];
   for (const law of laws) {
     if (done.has(law.id)) continue;
     const schedule = parseSchedule(law.schedule_json);
@@ -671,11 +767,272 @@ export async function getDueReminders(ctx: Ctx): Promise<Result> {
       [newId("log"), ctx.householdId, law.id, spoken, house.now],
     );
   }
+  // Laws about to lapse, and laws that have lapsed, are each announced once.
+  const noticed = await all<{ law_id: string; kind: string }>(
+    `SELECT law_id, kind FROM enforcement_log WHERE household_id = ? AND kind IN ('expiry_notice', 'lapsed')`,
+    [ctx.householdId],
+  );
+  const wasNoticed = (lawId: string, kind: string) => noticed.some((n) => n.law_id === lawId && n.kind === kind);
+  const ending = await all<Law>(
+    `SELECT * FROM laws WHERE household_id = ? AND expires_at IS NOT NULL
+       AND ((status = 'in_force' AND expires_at <= ?) OR status = 'expired')
+     ORDER BY number`,
+    [ctx.householdId, house.now + DAY_MS],
+  );
+  for (const law of ending) {
+    const kind = law.status === "expired" ? "lapsed" : "expiry_notice";
+    if (wasNoticed(law.id, kind)) continue;
+    const spoken =
+      kind === "lapsed"
+        ? `Act ${law.number}, ${law.title}, has lapsed and no longer binds the household.`
+        : `Notice: Act ${law.number}, ${law.title}, lapses on ${formatClock(law.expires_at!, house.tz)} unless the House passes it again.`;
+    reminders.push({ law_number: law.number, title: law.title, due: kind === "lapsed" ? "lapsed" : "lapses soon", spoken });
+    await run(
+      `INSERT INTO enforcement_log (id, household_id, law_id, kind, message, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+      [newId("log"), ctx.householdId, law.id, kind, spoken, house.now],
+    );
+  }
+
+  // Sunday evening brings the weekly State of the House, once.
+  if (local.weekday === 0 && local.hour >= 18) {
+    const done = await one<{ id: string }>(
+      `SELECT id FROM enforcement_log WHERE household_id = ? AND kind = 'recap' AND created_at >= ?`,
+      [ctx.householdId, startOfDay],
+    );
+    if (!done) {
+      const r = await recap(house);
+      reminders.push({ law_number: null, title: "State of the House", due: "weekly", spoken: r.spoken });
+      await run(
+        `INSERT INTO enforcement_log (id, household_id, law_id, kind, message, created_at) VALUES (?, ?, NULL, 'recap', ?, ?)`,
+        [newId("log"), ctx.householdId, r.spoken, house.now],
+      );
+    }
+  }
+
   return {
     ok: true,
     clock: formatClock(house.now, house.tz),
     reminders,
     spoken: reminders.length ? reminders.map((r) => r.spoken).join(" ") : "Nothing on the books is due right now.",
+  };
+}
+
+export interface AmendArgs {
+  member: string;
+  law: string;
+  change: string;
+  penalty?: string | null;
+  schedule?: Schedule | null;
+  expires_in_days?: number | null;
+}
+
+export async function proposeAmendment(ctx: Ctx, args: AmendArgs): Promise<Result> {
+  const house = await loadHouse(ctx.householdId);
+  const member = resolveMember(house, args.member);
+  const law = await resolveLaw(house, args.law);
+  const change = truncate(args.change ?? "", 400);
+  if (change.length < 3) throw new HouseError(`Say how ${law.title} should change.`);
+  await requireClearFloor(ctx.householdId);
+  const titles = await all<{ title: string }>(
+    `SELECT title FROM laws WHERE household_id = ? AND status = 'in_force' AND id != ?`,
+    [ctx.householdId, law.id],
+  );
+  const draft = await draftBill(change, {
+    scope: ctx.scope,
+    proposerName: member.name,
+    proposerKind: member.kind,
+    penalty: args.penalty ?? null,
+    existingTitles: titles.map((t) => t.title),
+    amending: {
+      number: law.number,
+      title: law.title,
+      statute_text: law.statute_text,
+      penalty: law.penalty,
+      schedule: describeSchedule(parseSchedule(law.schedule_json)),
+    },
+  });
+  if (draft.clarifying_question) return { ok: true, needs_clarification: true, spoken: draft.clarifying_question };
+
+  let penalty = draft.penalty;
+  let safetyNote = draft.safety_flag;
+  if (isUnsafePenalty(penalty)) {
+    penalty = HARMLESS_PENALTY;
+    safetyNote = "That penalty was not safe for a family, so the Clerk has written a harmless one instead.";
+  }
+  const schedule = args.schedule ?? draft.schedule ?? parseSchedule(law.schedule_json);
+  const days = args.expires_in_days ?? draft.expires_in_days;
+  const expiresAt = days ? house.now + days * DAY_MS : law.expires_at;
+  const id = newId("bill");
+  await run(
+    `INSERT INTO bills (id, household_id, proposer_id, kind, title, statute_text, penalty, schedule_json,
+       expires_at, target_law_id, status, created_at, safety_note)
+     VALUES (?, ?, ?, 'amend', ?, ?, ?, ?, ?, ?, 'debate', ?, ?)`,
+    [
+      id,
+      ctx.householdId,
+      member.id,
+      draft.title,
+      draft.statute_text,
+      penalty,
+      schedule ? JSON.stringify(schedule) : null,
+      expiresAt,
+      law.id,
+      house.now,
+      safetyNote,
+    ],
+  );
+  return {
+    ok: true,
+    bill: {
+      id,
+      kind: "amend",
+      amends: { number: law.number, title: law.title },
+      title: draft.title,
+      statute_text: draft.statute_text,
+      penalty,
+      schedule: describeSchedule(schedule),
+      status: "debate",
+    },
+    safety_note: safetyNote,
+    spoken: `${pick(ORDER)} ${member.name} moves to amend Act ${law.number}, so that it reads: ${draft.statute_text}${safetyNote ? ` ${safetyNote}` : ""} An amendment needs two thirds of the votes; the floor is open for debate.`,
+  };
+}
+
+export async function proposeRepeal(ctx: Ctx, args: { member: string; law: string; reason?: string | null }): Promise<Result> {
+  const house = await loadHouse(ctx.householdId);
+  const member = resolveMember(house, args.member);
+  const law = await resolveLaw(house, args.law);
+  await requireClearFloor(ctx.householdId);
+  const id = newId("bill");
+  const title = `Repeal of ${law.title}`;
+  const text = `Whereas ${law.title} has had its day, Act ${law.number} is hereby repealed and shall bind this household no longer.`;
+  await run(
+    `INSERT INTO bills (id, household_id, proposer_id, kind, title, statute_text, target_law_id, status, created_at)
+     VALUES (?, ?, ?, 'repeal', ?, ?, ?, 'debate', ?)`,
+    [id, ctx.householdId, member.id, title, text, law.id, house.now],
+  );
+  const reason = truncate(args.reason ?? "", 280);
+  if (reason) {
+    await run(`INSERT INTO debate (id, bill_id, member_id, text, created_at) VALUES (?, ?, ?, ?, ?)`, [
+      newId("deb"),
+      id,
+      member.id,
+      reason,
+      house.now,
+    ]);
+  }
+  return {
+    ok: true,
+    bill: { id, kind: "repeal", repeals: { number: law.number, title: law.title }, title, statute_text: text, status: "debate" },
+    spoken: `${pick(ORDER)} ${member.name} moves to repeal Act ${law.number}, ${law.title}. A repeal needs a simple majority; the floor is open for debate.`,
+  };
+}
+
+export async function impeachSpeaker(ctx: Ctx, args: { member: string; reason?: string | null }): Promise<Result> {
+  const house = await loadHouse(ctx.householdId);
+  const member = resolveMember(house, args.member);
+  const speaker = house.speaker;
+  if (!speaker) throw new HouseError("There is no Speaker to impeach.");
+  if (speaker.id === member.id) {
+    throw new HouseError("The Speaker cannot move to impeach themselves. Another member must bring the motion.");
+  }
+  const successor = successorOf(house.members, speaker.id);
+  if (!successor) throw new HouseError("The House needs at least two members before the chair can change hands.");
+  await requireClearFloor(ctx.householdId);
+  const id = newId("bill");
+  const title = `Motion to Impeach the Speaker`;
+  const text = `That this House has lost confidence in Speaker ${speaker.name}, and the chair shall pass to ${successor.name} until the week is out.`;
+  // target_law_id holds the id of the Speaker the motion is moved against.
+  await run(
+    `INSERT INTO bills (id, household_id, proposer_id, kind, title, statute_text, target_law_id, status, created_at)
+     VALUES (?, ?, ?, 'impeach', ?, ?, ?, 'debate', ?)`,
+    [id, ctx.householdId, member.id, title, text, speaker.id, house.now],
+  );
+  const reason = truncate(args.reason ?? "", 280);
+  if (reason) {
+    await run(`INSERT INTO debate (id, bill_id, member_id, text, created_at) VALUES (?, ?, ?, ?, ?)`, [
+      newId("deb"),
+      id,
+      member.id,
+      reason,
+      house.now,
+    ]);
+  }
+  return {
+    ok: true,
+    bill: { id, kind: "impeach", title, statute_text: text, status: "debate" },
+    spoken: `Order, order! ${member.name} moves to impeach the Speaker, ${speaker.name}. If the motion carries, ${successor.name} takes the chair until the week is out; any member may call the vote.`,
+  };
+}
+
+export async function stateOfTheHouse(ctx: Ctx): Promise<Result> {
+  const house = await loadHouse(ctx.householdId);
+  return { ok: true, ...(await recap(house)) };
+}
+
+async function recap(house: House) {
+  const id = house.household.id;
+  const since = house.now - 7 * DAY_MS;
+  const enacted = await all<{ title: string; number: number }>(
+    `SELECT title, number FROM laws WHERE household_id = ? AND enacted_at >= ? AND enacted_at <= ? ORDER BY number`,
+    [id, since, house.now],
+  );
+  const defeated = await one<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM bills WHERE household_id = ? AND status = 'defeated' AND closed_at >= ?`,
+    [id, since],
+  );
+  const impeached = await one<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM bills WHERE household_id = ? AND kind = 'impeach' AND status = 'enacted' AND closed_at >= ?`,
+    [id, since],
+  );
+  const repealed = await one<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM laws WHERE household_id = ? AND status = 'repealed' AND ended_at >= ?`,
+    [id, since],
+  );
+  const log = await all<{ kind: string; n: number }>(
+    `SELECT kind, COUNT(*) AS n FROM enforcement_log WHERE household_id = ? AND created_at >= ? GROUP BY kind`,
+    [id, since],
+  );
+  const voters = await all<{ member_id: string; n: number }>(
+    `SELECT v.member_id, COUNT(*) AS n FROM votes v JOIN bills b ON b.id = v.bill_id
+     WHERE b.household_id = ? AND v.created_at >= ? GROUP BY v.member_id ORDER BY n DESC`,
+    [id, since],
+  );
+  const inForce = await one<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM laws WHERE household_id = ? AND status = 'in_force'`,
+    [id],
+  );
+  const count = (k: string) => log.find((l) => l.kind === k)?.n ?? 0;
+  const next = speakerFor(house.members, house.now + 7 * DAY_MS, house.tz);
+  const top = voters[0] && (voters.length === 1 || voters[0].n > voters[1].n) ? memberName(house, voters[0].member_id) : null;
+
+  const passed =
+    enacted.length === 0
+      ? "this week the House enacted no new acts"
+      : `this week the House enacted ${enacted.map((l) => l.title).join(" and ")}`;
+  const lost = [
+    defeated?.n ? `defeated ${plural(defeated.n, "bill", "bills")}` : null,
+    repealed?.n ? `retired ${plural(repealed.n, "law", "laws")}` : null,
+    impeached?.n ? "impeached a Speaker" : null,
+  ].filter(Boolean);
+  const first = `State of the House: ${passed}${lost.length ? `, ${lost.length > 1 ? lost.slice(0, -1).join(", ") + ", and " + lost[lost.length - 1] : `and ${lost[0]}`}` : ""}.`;
+  const given = [
+    count("reminder") ? plural(count("reminder"), "reminder", "reminders") : null,
+    count("ruling") ? plural(count("ruling"), "ruling", "rulings") : null,
+  ].filter(Boolean);
+  const second = `The Clerk gave ${given.length ? given.join(" and ") : "no reminders or rulings"}${top ? `, and ${top} cast the most votes` : ""}.`;
+  const third = `${plural(inForce?.n ?? 0, "law is", "laws are")} in force, ${house.speaker?.name ?? "nobody"} holds the chair${next && next.id !== house.speaker?.id ? `, and ${next.name} takes it next week` : ""}.`;
+  return {
+    enacted: enacted.map((l) => ({ number: l.number, title: l.title })),
+    defeated: defeated?.n ?? 0,
+    repealed: repealed?.n ?? 0,
+    reminders: count("reminder"),
+    rulings: count("ruling"),
+    most_votes: top,
+    laws_in_force: inForce?.n ?? 0,
+    speaker: house.speaker?.name ?? null,
+    next_speaker: next?.name ?? null,
+    spoken: `${first} ${second} ${third}`,
   };
 }
 
@@ -704,7 +1061,16 @@ export async function advanceClock(
   const offset = target - Date.now();
   await run(`UPDATE households SET clock_offset_ms = ? WHERE id = ?`, [offset, ctx.householdId]);
   const label = formatClock(target, house.tz);
-  return { ok: true, clock: label, now: new Date(target).toISOString(), spoken: `The clock now reads ${label}.` };
+  const after = speakerFor(house.members, target, house.tz, house.household);
+  const chair =
+    after && after.id !== house.speaker?.id ? ` A new week begins, and ${after.name} takes the Speaker's chair.` : "";
+  return {
+    ok: true,
+    clock: label,
+    now: new Date(target).toISOString(),
+    speaker: after?.name ?? null,
+    spoken: `The clock now reads ${label}.${chair}`,
+  };
 }
 
 export async function resetDemo(ctx: Ctx): Promise<Result> {

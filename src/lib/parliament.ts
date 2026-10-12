@@ -8,13 +8,48 @@ export interface SeatedMember {
   seat: number;
 }
 
+/** Week number on the household calendar; weeks run Monday to Sunday. */
+export function weekNumber(nowMs: number, tz: string): number {
+  return Math.floor(localDayNumber(nowMs, tz) / 7);
+}
+
 /** The Speaker rotates weekly (Monday to Sunday) through the members in seat order. */
-export function speakerFor<T extends SeatedMember>(members: T[], nowMs: number, tz: string): T | null {
+export function rotationSpeaker<T extends SeatedMember>(members: T[], nowMs: number, tz: string): T | null {
   if (members.length === 0) return null;
   const ordered = [...members].sort((a, b) => a.seat - b.seat);
-  const week = Math.floor(localDayNumber(nowMs, tz) / 7);
+  const week = weekNumber(nowMs, tz);
   const index = ((week % ordered.length) + ordered.length) % ordered.length;
   return ordered[index];
+}
+
+export interface SpeakerOverride {
+  speaker_override_id: string | null;
+  speaker_override_week: number | null;
+}
+
+/**
+ * This week's Speaker: the rotation, unless the House impeached the Speaker this week,
+ * in which case the member chosen by the motion holds the chair until the week ends.
+ */
+export function speakerFor<T extends SeatedMember>(
+  members: T[],
+  nowMs: number,
+  tz: string,
+  override?: SpeakerOverride | null,
+): T | null {
+  if (override?.speaker_override_id && override.speaker_override_week === weekNumber(nowMs, tz)) {
+    const chosen = members.find((m) => m.id === override.speaker_override_id);
+    if (chosen) return chosen;
+  }
+  return rotationSpeaker(members, nowMs, tz);
+}
+
+/** The member who takes the chair when the Speaker is impeached: the next seat along. */
+export function successorOf<T extends SeatedMember>(members: T[], speakerId: string): T | null {
+  const ordered = [...members].sort((a, b) => a.seat - b.seat);
+  const i = ordered.findIndex((m) => m.id === speakerId);
+  if (i === -1 || ordered.length < 2) return null;
+  return ordered[(i + 1) % ordered.length];
 }
 
 export interface TallyInput {
@@ -79,7 +114,10 @@ export function tally(input: TallyInput): TallyResult {
   let outcome: Outcome;
   if (!quorum) outcome = "no_quorum";
   else if (!passed) outcome = "defeated";
-  else if (input.assentRequired && input.proposerKind === "child") outcome = "awaiting_assent";
+  // Parental Assent applies to laws; a motion to impeach the Speaker is not a law.
+  else if (input.assentRequired && input.proposerKind === "child" && input.kind !== "impeach") {
+    outcome = "awaiting_assent";
+  }
   else outcome = "enacted";
 
   return {

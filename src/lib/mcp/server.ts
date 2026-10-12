@@ -171,6 +171,52 @@ export function createMootServer(mcp: McpContext): McpServer {
     (a) => house.withdrawBill(ctx(), a),
   );
 
+  const lawRef = z
+    .string()
+    .min(1)
+    .max(80)
+    .describe('Which law: its act number ("3" or "Act 3") or its title.');
+
+  register(
+    "propose_amendment",
+    "Propose an amendment",
+    "Move to change an existing law. The Clerk drafts the full act as amended. If passed (two thirds of votes cast), the amended act is enacted under a new number and replaces the old one.",
+    {
+      member,
+      law: lawRef,
+      change: z.string().min(1).max(600).describe("What should change, in the member's words."),
+      penalty: z.string().max(200).optional().describe("A new penalty, if the member asked for one."),
+      schedule: ScheduleSchema.optional().describe("A new schedule, if the member changed when it applies."),
+      expires_in_days: z.number().int().min(1).max(3650).optional().describe("Make the amended law lapse after this many days."),
+    },
+    (a) => house.proposeAmendment(ctx(), a),
+  );
+
+  register(
+    "propose_repeal",
+    "Propose a repeal",
+    "Move to repeal an existing law. If passed (simple majority), the law is struck from the books.",
+    { member, law: lawRef, reason: z.string().max(400).optional().describe("Why, in the member's words, if given.") },
+    (a) => house.proposeRepeal(ctx(), a),
+  );
+
+  register(
+    "impeach_speaker",
+    "Impeach the Speaker",
+    "A playful motion of no confidence in this week's Speaker. Any member except the Speaker can move it, and any member can call its vote. If it carries (simple majority), the next member in seat order takes the chair until the week ends.",
+    { member, reason: z.string().max(400).optional().describe("The member's complaint, if given.") },
+    (a) => house.impeachSpeaker(ctx(), a),
+  );
+
+  register(
+    "state_of_the_house",
+    "State of the House",
+    "A spoken recap of the past seven days: acts passed, bills defeated, laws retired, reminders and rulings given, who voted most, and who holds the chair now and next week.",
+    {},
+    () => house.stateOfTheHouse(ctx()),
+    true,
+  );
+
   register(
     "list_laws",
     "List laws",
@@ -196,7 +242,7 @@ export function createMootServer(mcp: McpContext): McpServer {
   register(
     "get_due_reminders",
     "Get due reminders",
-    "Laws whose schedule falls due today on the household clock and that have not been reminded yet today, each with a spoken reminder. Each is logged so it is only given once per day.",
+    "Proactive announcements due now on the household clock: laws whose schedule falls due today (once per day each), laws about to lapse or that have lapsed (once each), and the weekly State of the House on Sunday evening. Each comes with a spoken line and is logged so it is not repeated.",
     {},
     () => house.getDueReminders(ctx()),
   );

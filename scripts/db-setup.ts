@@ -1,13 +1,10 @@
 // Creates the Moot tables in the database named by TURSO_DATABASE_URL.
 // Usage: npm run db:setup  (reads .env.local if present)
-import { db } from "../src/lib/db";
-import { SCHEMA } from "../src/lib/schema";
+import { ensureSchema } from "../src/lib/db";
 
 async function main() {
-  for (const sql of SCHEMA) {
-    await db().execute(sql);
-  }
-  console.log(`Applied ${SCHEMA.length} schema statements.`);
+  await ensureSchema();
+  console.log("Schema and migrations are up to date.");
 }
 
 main().catch((err) => {

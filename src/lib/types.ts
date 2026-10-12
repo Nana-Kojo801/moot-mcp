@@ -16,7 +16,7 @@ export const ScheduleSchema = z.discriminatedUnion("type", [
 export type Schedule = z.infer<typeof ScheduleSchema>;
 
 export type MemberKind = "adult" | "child";
-export type BillKind = "new" | "amend" | "repeal";
+export type BillKind = "new" | "amend" | "repeal" | "impeach";
 export type BillStatus = "debate" | "voting" | "enacted" | "defeated" | "withdrawn";
 export type LawStatus = "in_force" | "expired" | "repealed";
 export type Choice = "aye" | "nay" | "abstain";
@@ -29,6 +29,8 @@ export interface Household {
   clock_offset_ms: number;
   timezone: string;
   is_demo: number;
+  speaker_override_id: string | null;
+  speaker_override_week: number | null;
 }
 
 export interface Member {
@@ -80,6 +82,7 @@ export interface Law {
   expires_at: number | null;
   status: LawStatus;
   supersedes_law_id: string | null;
+  ended_at: number | null;
 }
 
 export function parseSchedule(json: string | null): Schedule | null {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { quorumNeeded, speakerFor, tally, type TallyInput } from "../src/lib/parliament";
+import { quorumNeeded, speakerFor, successorOf, tally, weekNumber, type TallyInput } from "../src/lib/parliament";
 import type { Choice } from "../src/lib/types";
 
 const members = [
@@ -146,5 +146,39 @@ describe("Speaker rotation", () => {
 
   it("returns null for an empty house", () => {
     expect(speakerFor([], wed, tz)).toBeNull();
+  });
+});
+
+describe("impeachment", () => {
+  it("is carried by a simple majority without Parental Assent", () => {
+    const r = tally(input({ sam: "aye", maya: "aye", jo: "nay" }, { kind: "impeach", proposerKind: "child" }));
+    expect(r.threshold).toBe("simple");
+    expect(r.outcome).toBe("enacted");
+  });
+
+  it("fails on a tie unless the Speaker votes aye", () => {
+    expect(
+      tally(input({ sam: "aye", maya: "aye", jo: "nay", leo: "nay" }, { kind: "impeach" })).outcome,
+    ).toBe("defeated");
+  });
+});
+
+describe("Speaker override", () => {
+  const tz = "America/New_York";
+  const wed = Date.UTC(2026, 6, 8, 16, 0);
+  const week = 7 * 24 * 60 * 60 * 1000;
+
+  it("holds the chair for the rest of the week it was set", () => {
+    const rotation = speakerFor(members, wed, tz)!;
+    const chosen = successorOf(members, rotation.id)!;
+    const override = { speaker_override_id: chosen.id, speaker_override_week: weekNumber(wed, tz) };
+    expect(speakerFor(members, wed, tz, override)?.id).toBe(chosen.id);
+    expect(speakerFor(members, wed + week, tz, override)?.id).toBe(speakerFor(members, wed + week, tz)?.id);
+  });
+
+  it("passes the chair to the next seat, wrapping around", () => {
+    expect(successorOf(members, "leo")?.id).toBe("sam");
+    expect(successorOf(members, "jo")?.id).toBe("maya");
+    expect(successorOf([members[0]], "sam")).toBeNull();
   });
 });

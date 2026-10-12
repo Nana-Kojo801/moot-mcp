@@ -17,6 +17,7 @@ const ALLOWED = new Set([
   "call_vote",
   "give_assent",
   "withdraw_bill",
+  "state_of_the_house",
 ]);
 
 export async function POST(req: Request) {

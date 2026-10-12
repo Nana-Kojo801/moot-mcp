@@ -59,14 +59,31 @@ export function newId(prefix: string): string {
 
 let schemaReady: Promise<void> | null = null;
 
-/** Applies the schema once per server process (all statements are idempotent). */
+async function applySchema() {
+  const { SCHEMA, MIGRATIONS } = await import("./schema");
+  await db().batch(SCHEMA, "write");
+  const row = await one<{ value: number }>(`SELECT value FROM schema_meta WHERE key = 'migrations'`);
+  const applied = row?.value ?? 0;
+  for (let i = applied; i < MIGRATIONS.length; i++) {
+    try {
+      await db().execute(MIGRATIONS[i]);
+    } catch (err) {
+      // A fresh database may already have the column if two servers raced; anything else is real.
+      if (!/duplicate column/i.test(String(err))) throw err;
+    }
+    await run(
+      `INSERT INTO schema_meta (key, value) VALUES ('migrations', ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      [i + 1],
+    );
+  }
+}
+
+/** Applies the schema and pending migrations once per server process. */
 export function ensureSchema(): Promise<void> {
-  schemaReady ??= import("./schema")
-    .then(({ SCHEMA }) => db().batch(SCHEMA, "write"))
-    .then(() => undefined)
-    .catch((err) => {
-      schemaReady = null;
-      throw err;
-    });
+  schemaReady ??= applySchema().catch((err) => {
+    schemaReady = null;
+    throw err;
+  });
   return schemaReady;
 }

@@ -166,6 +166,8 @@ export interface DraftContext {
   proposerKind: string;
   penalty?: string | null;
   existingTitles: string[];
+  /** When set, the idea is a change to this existing act and the draft is the full amended act. */
+  amending?: { number: number; title: string; statute_text: string; penalty: string | null; schedule: string | null };
 }
 
 function normalizeSchedule(s: z.infer<typeof DraftSchema>["schedule"]): Schedule | null {
@@ -187,8 +189,12 @@ Rules:
 - expires_in_days: only if the member gave a time limit, otherwise null.
 - clarifying_question: if the idea is too vague to become a rule, ask one short question and leave the other fields as best guesses. Otherwise null.
 - If the idea itself is unsafe or unkind, set safety_flag and rewrite it into a kind, harmless version.`;
+  const a = ctx.amending;
+  const amendNote = a
+    ? `\nThis is an AMENDMENT to an existing act. Write the full act as it would read after the change, keeping everything the member did not ask to change (including the penalty and schedule unless they changed them). Keep the title "${a.title}" unless the change makes it wrong. The existing act, Act no. ${a.number}: ${a.title}. Text: ${a.statute_text}${a.penalty ? ` Penalty: ${a.penalty}` : ""}${a.schedule ? ` Schedule: ${a.schedule}` : ""}`
+    : "";
   const user = `Proposer: ${ctx.proposerName} (${ctx.proposerKind}).
-Idea: ${truncate(idea, 400)}${ctx.penalty ? `\nPenalty they asked for: ${truncate(ctx.penalty, 200)}` : ""}`;
+${a ? "Requested change" : "Idea"}: ${truncate(idea, 400)}${ctx.penalty ? `\nPenalty they asked for: ${truncate(ctx.penalty, 200)}` : ""}${amendNote}`;
   const out = await callJson(ctx.scope, "draft_bill", DraftSchema, system, user);
   const days = out.expires_in_days;
   if (!out.clarifying_question && (out.title.trim().length < 3 || out.statute_text.trim().length < 5)) {
@@ -317,6 +323,8 @@ How to read what members say:
 - Use propose_bill only when the member clearly proposes a new rule ("I propose", "I move", "new rule", "let's make a law").
 - While a bill is before the House, opinions, arguments and suggestions about it ("I think", "we should", "I'd like to say") are debate: call add_debate_statement with their words.
 - A short "aye", "nay", "no", "yes", "abstain", "I vote for it" or "I'm against it" is a vote on the bill before the House: call cast_vote (yes means aye, no means nay).
+- To change an existing law use propose_amendment; to scrap one use propose_repeal; both name the law by act number or title.
+- "Impeach the Speaker", "no confidence in the Speaker" and the like mean impeach_speaker. "State of the House" or "how did this week go" means state_of_the_house.
 When a tool result includes "spoken", base your reply on it and keep its facts (act names, numbers, dates, counts) exactly. If a tool fails, tell the member plainly what happened and what to do next.
 If the member says something that is not parliamentary business, answer briefly and invite them to propose a bill or ask about a law.`;
 

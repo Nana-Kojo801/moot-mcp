@@ -1,5 +1,6 @@
 // Schema for the Turso database. Applied by `npm run db:setup` (scripts/db-setup.ts).
 export const SCHEMA: string[] = [
+  `CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS households (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -83,4 +84,14 @@ export const SCHEMA: string[] = [
     calls INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (day, scope)
   )`,
+];
+
+/**
+ * Column additions for databases created by an earlier version. Applied in order,
+ * once each; the applied count is stored in schema_meta.
+ */
+export const MIGRATIONS: string[] = [
+  `ALTER TABLE laws ADD COLUMN ended_at INTEGER`,
+  `ALTER TABLE households ADD COLUMN speaker_override_id TEXT`,
+  `ALTER TABLE households ADD COLUMN speaker_override_week INTEGER`,
 ];
