@@ -317,7 +317,7 @@ export async function agentTurn(input: AgentTurnInput): Promise<AgentTurnResult>
   const system = `You are the Clerk of the House in Moot, a parliament game for a family household. You speak aloud, so reply in plain spoken English: at most three short sentences, no markdown, no lists, family-friendly, warm and a little ceremonial.
 The member speaking now is ${input.speaker.name} (${input.speaker.kind}). Pass member="${input.speaker.name}" to tools unless they clearly speak for someone else.
 ${input.householdBrief}
-Use the tools to do what the member asks. You may chain tools, for example propose_bill then cast_vote.
+Use the tools to do what the member asks. Make every tool call the request needs in a single response, for example propose_bill and cast_vote together; bill_id can be left out because tools use the bill before the House. The tools' own spoken lines are read aloud after a successful call.
 How to read what members say:
 - The household details above are current, so do not call get_household unless the member asks about the household.
 - Use propose_bill only when the member clearly proposes a new rule ("I propose", "I move", "new rule", "let's make a law").
@@ -359,6 +359,7 @@ If the member says something that is not parliamentary business, answer briefly 
       return { reply: cleanSpoken(msg.content ?? "") || fallbackReply(steps), steps };
     }
     messages.push({ role: "assistant", content: msg.content ?? null, tool_calls: msg.tool_calls });
+    const roundStart = steps.length;
     for (const call of calls) {
       let args: Record<string, unknown> = {};
       let result: Record<string, unknown>;
@@ -378,6 +379,12 @@ If the member says something that is not parliamentary business, answer briefly 
         tool_call_id: call.id,
         content: JSON.stringify(result).slice(0, 4000),
       });
+    }
+    // Every tool already wrote its own spoken line. When the whole round succeeded, speak those
+    // lines instead of paying for another model call; only failures go back to the model to recover.
+    const round = steps.slice(roundStart);
+    if (round.length > 0 && round.every((s) => s.result.ok !== false && typeof s.result.spoken === "string")) {
+      return { reply: fallbackReply(round), steps };
     }
   }
   return { reply: fallbackReply(steps), steps };

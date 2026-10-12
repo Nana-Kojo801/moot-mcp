@@ -68,10 +68,17 @@ export async function POST(req: Request) {
           speaker,
           householdBrief: text,
           tools,
-          callTool: (name, args) =>
-            HIDDEN_FROM_CLERK.has(name)
-              ? Promise.resolve({ ok: false, spoken: "That control is a button in the app." })
-              : mcp.callTool(name, args),
+          callTool: (name, args) => {
+            if (HIDDEN_FROM_CLERK.has(name)) {
+              return Promise.resolve({ ok: false, spoken: "That control is a button in the app." });
+            }
+            // Who is speaking comes from the selected nameplate (standing in for voice recognition),
+            // never from the model: every member acts as themselves.
+            const takesMember = tools.find((t) => t.name === name)?.inputSchema?.properties as
+              | Record<string, unknown>
+              | undefined;
+            return mcp.callTool(name, takesMember && "member" in takesMember ? { ...args, member: speaker.name } : args);
+          },
         });
       },
     );
