@@ -36,18 +36,23 @@ function tilt(id: string): string {
 export function Hemicycle({
   members,
   speakerId,
+  nextSpeakerId,
+  acting,
   speakingAs,
   bill,
   onSelect,
 }: {
   members: MemberView[];
   speakerId: string | null;
+  nextSpeakerId: string | null;
+  acting: boolean;
   speakingAs: string | null;
   bill: BillView | null;
   onSelect: (id: string) => void;
 }) {
   const seats = seatLayout(members);
   const speaker = members.find((m) => m.id === speakerId);
+  const next = members.find((m) => m.id === nextSpeakerId);
   const many = members.length > 5;
   const showVotes = bill && bill.status !== "withdrawn";
   return (
@@ -93,8 +98,9 @@ export function Hemicycle({
         <div className="chair__dais" aria-hidden="true">
           <GavelIcon />
         </div>
-        <span className="chair__label">Speaker this week</span>
+        <span className="chair__label">{acting ? "Acting Speaker" : "Speaker this week"}</span>
         <span className="chair__name">{speaker?.name ?? "Vacant"}</span>
+        {next && next.id !== speaker?.id && <span className="chair__next">Next week: {next.name}</span>}
       </div>
     </div>
   );

@@ -32,9 +32,19 @@ export function OrderPaper({ bill, animateStamp }: { bill: BillView | null; anim
     );
   }
 
-  const stamp = bill.status === "enacted" ? "ENACTED" : bill.status === "defeated" ? "DEFEATED" : null;
+  const passedWord = bill.kind === "repeal" ? "REPEALED" : bill.kind === "impeach" ? "IMPEACHED" : "ENACTED";
+  const stamp = bill.status === "enacted" ? passedWord : bill.status === "defeated" ? "DEFEATED" : null;
+  const t = bill.target;
+  const subject =
+    bill.kind === "amend" && t?.kind === "law"
+      ? `Amendment to Act ${t.number}, ${t.title}`
+      : bill.kind === "repeal" && t?.kind === "law"
+        ? `Repeal of Act ${t.number}`
+        : bill.kind === "impeach" && t?.kind === "speaker"
+          ? `Motion of no confidence in Speaker ${t.name}`
+          : null;
   const meta = [
-    `Proposed by ${bill.proposer}`,
+    `${bill.kind === "new" ? "Proposed" : "Moved"} by ${bill.proposer}`,
     bill.schedule,
     bill.expires_on ? `Expires ${bill.expires_on}` : null,
     bill.law_number ? `Act ${bill.law_number}` : null,
@@ -46,7 +56,7 @@ export function OrderPaper({ bill, animateStamp }: { bill: BillView | null; anim
       aria-label="Order paper"
       aria-live="polite"
     >
-      <p className="paper__label">Order paper</p>
+      <p className="paper__label">Order paper{subject ? ` · ${subject}` : ""}</p>
       <h2 className="paper__title">{bill.title}</h2>
       <p className="paper__text">{bill.statute_text}</p>
       <p className="paper__meta">{meta.join(" · ")}</p>
@@ -65,7 +75,13 @@ export function OrderPaper({ bill, animateStamp }: { bill: BillView | null; anim
         <span>Ayes {bill.tally.ayes}</span>
         <span>Noes {bill.tally.nays}</span>
         <span>Abstain {bill.tally.abstains}</span>
-        <span className="tally__status">{STATUS_LABEL[bill.status] ?? bill.status}</span>
+        <span className="tally__status">
+          {bill.status === "enacted" && bill.kind === "impeach"
+            ? "Carried"
+            : bill.status === "enacted" && bill.kind === "repeal"
+              ? "Passed"
+              : (STATUS_LABEL[bill.status] ?? bill.status)}
+        </span>
       </div>
       {stamp && (
         <div
@@ -74,6 +90,7 @@ export function OrderPaper({ bill, animateStamp }: { bill: BillView | null; anim
           style={{ ["--angle" as string]: angle }}
           role="img"
           aria-label={`Stamped ${stamp.toLowerCase()}`}
+          data-kind={bill.kind}
         >
           {stamp}
         </div>

@@ -1,8 +1,8 @@
 // Read model for the web app: everything the Chamber and Statute Book draw.
 import { all, one } from "./db";
-import { formatClock, formatDate } from "./clock";
+import { DAY_MS, formatClock, formatDate } from "./clock";
 import { describeSchedule, loadHouse } from "./house";
-import { tally } from "./parliament";
+import { rotationSpeaker, speakerFor, tally } from "./parliament";
 import { parseSchedule, type Bill, type Law, type Vote } from "./types";
 import { env } from "./env";
 
@@ -67,6 +67,16 @@ export async function getState(householdId: string) {
         .filter((d) => d.bill_id === b.id)
         .map((d) => ({ id: d.id, member: name(d.member_id), member_id: d.member_id, text: d.text })),
       law_number: law?.number ?? null,
+      // What the bill acts on: the law it amends or repeals, or the Speaker an impeachment targets.
+      target:
+        b.kind === "impeach"
+          ? { kind: "speaker" as const, name: name(b.target_law_id ?? "") }
+          : b.target_law_id
+            ? (() => {
+                const t = laws.find((x) => x.id === b.target_law_id);
+                return t ? { kind: "law" as const, number: t.number, title: t.title } : null;
+              })()
+            : null,
       closed_at: b.closed_at,
     };
   };
@@ -94,6 +104,9 @@ export async function getState(householdId: string) {
     },
     members: members.map((m) => ({ id: m.id, name: m.name, kind: m.kind, color: m.color, seat: m.seat })),
     speakerId: house.speaker?.id ?? null,
+    nextSpeakerId: speakerFor(members, now + 7 * DAY_MS, tz)?.id ?? null,
+    // True when an impeachment changed the chair this week.
+    actingSpeaker: !!house.speaker && house.speaker.id !== rotationSpeaker(members, now, tz)?.id,
     bill: featured ? billView(featured) : null,
     laws: laws.map((l) => {
       const bill = bills.find((b) => b.id === l.bill_id);
@@ -108,7 +121,13 @@ export async function getState(householdId: string) {
         expires_on: l.expires_at ? formatDate(l.expires_at, tz) : null,
         status: l.status,
         supersedes: l.supersedes_law_id ? laws.find((x) => x.id === l.supersedes_law_id)?.number ?? null : null,
+        replaced_by: laws.find((x) => x.supersedes_law_id === l.id)?.number ?? null,
+        ended_on: l.ended_at ? formatDate(l.ended_at, tz) : null,
         history: bill ? billView(bill) : null,
+        repeal: (() => {
+          const r = bills.find((b) => b.kind === "repeal" && b.target_law_id === l.id && b.status === "enacted");
+          return r ? billView(r) : null;
+        })(),
       };
     }),
     log: log.map((e) => ({ ...e, when: formatClock(e.created_at, tz) })),

@@ -39,7 +39,7 @@ interface ClerkReply {
   budget_exhausted?: boolean;
 }
 
-const BUSINESS = new Set(["call_vote", "close_vote", "give_assent", "get_due_reminders"]);
+const BUSINESS = new Set(["call_vote", "close_vote", "give_assent", "get_due_reminders", "state_of_the_house"]);
 
 function reducedMotion(): boolean {
   return typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -194,6 +194,8 @@ export function Chamber({
       <Hemicycle
         members={members}
         speakerId={state.speakerId}
+        nextSpeakerId={state.nextSpeakerId}
+        acting={state.actingSpeaker}
         speakingAs={current?.id ?? null}
         bill={state.bill}
         onSelect={selectMember}

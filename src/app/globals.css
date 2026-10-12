@@ -383,6 +383,12 @@ button {
   padding-top: 2px;
 }
 
+.chair__next {
+  display: block;
+  font-size: 0.68rem;
+  color: var(--chalk-dim);
+}
+
 .chair__name {
   font-family: var(--slab);
   font-weight: 700;
@@ -507,8 +513,14 @@ button {
   mix-blend-mode: multiply;
 }
 
-.stamp--defeated {
+.stamp--defeated,
+.stamp[data-kind="impeach"] {
   color: var(--stamp);
+}
+
+.stamp[data-kind="impeach"],
+.stamp[data-kind="repeal"] {
+  font-size: 1.7rem;
 }
 
 .stamp--animate {
@@ -720,6 +732,18 @@ button {
   margin: 0 0 8px;
   color: var(--ink-dim);
   font-size: 0.92rem;
+}
+
+.recap {
+  margin: 4px 0 14px;
+}
+
+.recap__text {
+  margin: 10px 0 0;
+  padding-left: 10px;
+  border-left: 3px solid var(--brass);
+  font-size: 0.92rem;
+  max-width: 66ch;
 }
 
 .act {
