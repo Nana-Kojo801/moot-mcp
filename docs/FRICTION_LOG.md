@@ -105,3 +105,31 @@ Problems and confusion hit while building Moot, recorded as they happened. Sever
 - **Task:** Develop and test before the Turso database existed.
 - **Actual:** Worked well: the same client accepts a `file:` URL, so the whole app ran against a local SQLite file with no code changes. `@libsql/client` was added to `serverExternalPackages` up front so its native bindings are not bundled.
 - **Severity:** low (a positive note)
+
+### 12. Adding columns to a deployed Turso database
+
+- **Product:** Turso / SQLite
+- **Task:** Phase 2 needed new columns on tables already created in the live database.
+- **Actual:** `CREATE TABLE IF NOT EXISTS` does nothing for existing tables, and SQLite has no `ADD COLUMN IF NOT EXISTS`.
+- **Severity:** low
+- **Workaround:** A `schema_meta` table records how many migrations have run; pending `ALTER TABLE` statements run once per server process on first use, tolerating "duplicate column" if two servers race.
+- **Suggestion:** `ADD COLUMN IF NOT EXISTS` in libSQL would remove the bookkeeping.
+
+### 13. MCP Apps package versions are tied to SDK generations
+
+- **Product:** `@modelcontextprotocol/ext-apps`
+- **Task:** Add an MCP Apps Statute Book card to `list_laws`.
+- **Expected:** Install the latest package next to `@modelcontextprotocol/sdk`.
+- **Actual:** `ext-apps` 2.x peers on the split v2 packages (`@modelcontextprotocol/server`, `client`, `core`); projects on `@modelcontextprotocol/sdk` 1.x need `ext-apps` 1.7.x. Only visible by reading `peerDependencies`.
+- **Severity:** medium
+- **Workaround:** Pinned `ext-apps@1.7.5`, used its `registerAppResource` helper on the server, and wrote the view's side of the protocol (`ui/initialize`, `ui/notifications/initialized`, `ui/notifications/tool-result`, `size-changed`) by hand in a self-contained HTML page, so no client bundle is needed.
+- **Suggestion:** A compatibility table in the README, and a tiny dependency-free view script for simple cards.
+
+### 14. The real model treated debate as new bills
+
+- **Product:** OpenAI tool calling (with our tool descriptions)
+- **Task:** First live run on Vercel.
+- **Actual:** "I think we should get popcorn every time" became a second `propose_bill` instead of `add_debate_statement`, and a bare "nay" got a clarifying question instead of `cast_vote`. The scripted local stand-in had not caught this.
+- **Severity:** medium
+- **Workaround:** Explicit rules in the Clerk's system prompt for proposals, debate and votes, and the household brief tells the model it is current so it stops calling `get_household` first. Verified live.
+- **Suggestion:** Test tool selection against the real model early; a scripted mock only checks the plumbing.

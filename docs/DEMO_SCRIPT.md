@@ -50,6 +50,14 @@ One line over the title card:
    > "Can I wear shoes in the house?"
 2. The Clerk rules under The Shoes Off Act, citing its act and the date it was enacted.
 
+## Optional beat (if time allows): impeach the Speaker
+
+As any member except the Speaker, say:
+
+> "I move to impeach the Speaker. Too much gavel."
+
+Call the vote, vote, and close it. The **IMPEACHED** stamp lands and the chair shows the next member as Acting Speaker. Or amend a law ("Amend the Shoes Off Act so slippers are allowed") to show laws evolving.
+
 ## 2:15 to 2:45: the real MCP server
 
 In a terminal (screen-record it), run:

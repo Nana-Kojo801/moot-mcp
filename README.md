@@ -43,9 +43,11 @@ What makes it different from one-off "AI judge" apps: Moot **keeps the laws and 
 - Bills move from `debate` to `voting` to `enacted` or `defeated` (or `withdrawn`). Only one bill is before the House at a time.
 - **Quorum:** more than half the members must vote (abstaining counts as voting). Without quorum the vote stays open.
 - **Ordinary bills** pass on a simple majority of ayes over noes. **Ties are defeated unless the Speaker voted aye.**
-- **Amendments** need two thirds; **repeals** need a simple majority. (The thresholds are implemented and tested; the amendment and repeal tools are a Phase 2 feature.)
+- **Amendments** need two thirds of votes cast; the amended act gets a new number and replaces the old one. **Repeals** need a simple majority.
+- **Impeaching the Speaker** is a playful motion: any member but the Speaker can move it, anyone can call its vote, and if it carries the next member in seat order takes the chair until the week ends.
 - **Parental Assent** (on by default): a bill proposed by a child that passes waits for an adult to give assent.
-- Laws have a number, title, statute text, optional penalty, optional schedule (`standing`, `weekly`, `daily`), enacted date and optional expiry.
+- Laws have a number, title, statute text, optional penalty, optional schedule (`standing`, `weekly`, `daily`), enacted date and optional expiry. The Clerk warns the day before a law lapses and announces when it has.
+- Every Sunday evening the Clerk gives a spoken **State of the House**: acts passed, bills defeated, laws retired, reminders and rulings, who voted most, and who holds the chair next.
 
 The rules live in `src/lib/parliament.ts` with unit tests in `tests/`.
 
@@ -61,11 +63,17 @@ The rules live in `src/lib/parliament.ts` with unit tests in `tests/`.
 | `close_vote` | Optional `bill_id`. Applies quorum and thresholds, returns a roll call, enacts, defeats, or waits for assent. |
 | `give_assent` | `member` (an adult), optional `bill_id`. |
 | `withdraw_bill` | `member` (proposer or Speaker), optional `bill_id`. |
+| `propose_amendment` | `member`, `law` (act number or title), `change`, optional `penalty`, `schedule`, `expires_in_days`. The AI drafts the full amended act. |
+| `propose_repeal` | `member`, `law`, optional `reason`. |
+| `impeach_speaker` | `member`, optional `reason`. A motion of no confidence in this week's Speaker. |
+| `state_of_the_house` | The weekly recap, on demand. |
 | `list_laws` | Optional `status`: `in_force` (default), `expired`, `repealed`, `all`. |
 | `check_rule` | `question`, `member`. Rules against the laws in force, citing the act and its enacted date, or offers to draft a bill. |
-| `get_due_reminders` | Laws due today on the household clock that have not been reminded today, each with a spoken reminder. Logged so each fires once per day. |
+| `get_due_reminders` | Everything the Clerk should announce now: laws due today (once per day each), laws about to lapse or just lapsed, and the Sunday-evening State of the House. Logged so nothing repeats. |
 | `advance_clock` | Demo mode only. Move the household clock by `hours`/`days`, or to the next `day` and `time`. |
 | `reset_demo` | Demo mode only. Restore the seeded household. |
+
+`list_laws` also carries an **MCP Apps** view (`ui://moot/statute-book`, served by `resources/read`): hosts that support MCP Apps render a small Statute Book card next to the result. It is a self-contained HTML page that speaks the MCP Apps postMessage protocol directly.
 
 Every tool returns structured content with `ok` and a short `spoken` string (plain sentences for text-to-speech) plus tool-specific data. Bill ids are optional: tools default to the bill currently before the House, which suits a voice agent.
 
@@ -194,6 +202,7 @@ src/app/api/mcp          the MCP endpoint (Streamable HTTP, stateless)
 src/app/api/clerk        the agent loop for the simulated voice assistant
 src/lib/mcp/server.ts    tool definitions
 src/lib/mcp/client.ts    MCP client used by the app
+src/lib/mcp/statute-card.ts  MCP Apps view for list_laws
 src/lib/house.ts         parliamentary business behind each tool
 src/lib/parliament.ts    quorum, thresholds, tie-break, assent, Speaker rotation
 src/lib/ai.ts            every AI call (swap providers by editing this file)
