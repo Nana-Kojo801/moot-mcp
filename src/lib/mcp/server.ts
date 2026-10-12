@@ -1,5 +1,6 @@
 // The Moot MCP server: the household parliament exposed as tools.
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { RESOURCE_MIME_TYPE, registerAppResource } from "@modelcontextprotocol/ext-apps/server";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { WEEKDAYS } from "../clock";
@@ -9,6 +10,7 @@ import { BudgetError, RISEN_MESSAGE } from "../usage";
 import { env } from "../env";
 import { ScheduleSchema } from "../types";
 import * as house from "../house";
+import { STATUTE_CARD_HTML, STATUTE_CARD_URI } from "./statute-card";
 
 export const SERVER_INFO = { name: "moot", title: "Moot: a parliament for your household", version: "0.1.0" };
 
@@ -83,6 +85,7 @@ export function createMootServer(mcp: McpContext): McpServer {
     inputSchema: S,
     handler: (args: z.infer<z.ZodObject<S>>) => Promise<house.Result>,
     readOnly = false,
+    meta?: Record<string, unknown>,
   ) => {
     server.registerTool(
       name,
@@ -92,6 +95,7 @@ export function createMootServer(mcp: McpContext): McpServer {
         inputSchema,
         outputSchema: ResultShape,
         annotations: { readOnlyHint: readOnly, destructiveHint: false, openWorldHint: false },
+        ...(meta ? { _meta: meta } : {}),
       },
       // The SDK infers argument types from the shape; the cast keeps this helper generic.
       ((args: z.infer<z.ZodObject<S>>) => respond(() => handler(args))) as never,
@@ -229,6 +233,18 @@ export function createMootServer(mcp: McpContext): McpServer {
     },
     (a) => house.listLaws(ctx(), a),
     true,
+    // MCP Apps: hosts that support it show the Statute Book card with the result.
+    { ui: { resourceUri: STATUTE_CARD_URI }, "ui/resourceUri": STATUTE_CARD_URI },
+  );
+
+  registerAppResource(
+    server,
+    "Statute Book card",
+    STATUTE_CARD_URI,
+    { description: "An interactive view of the household's laws, shown with list_laws results." },
+    async () => ({
+      contents: [{ uri: STATUTE_CARD_URI, mimeType: RESOURCE_MIME_TYPE, text: STATUTE_CARD_HTML }],
+    }),
   );
 
   register(
