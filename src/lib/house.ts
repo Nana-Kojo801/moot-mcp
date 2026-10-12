@@ -336,7 +336,9 @@ export async function callVote(
   const member = resolveMember(house, args.member);
   const bill = await resolveBill(house, args.bill_id);
   if (bill.status === "voting" && !bill.awaiting_assent) {
-    throw new HouseError(`The vote on ${bill.title} is already open. Members can say aye, nay, or abstain.`);
+    throw new HouseError(
+      `The vote on ${bill.title} is already open. Members can say aye, nay, or abstain, and anyone can say "close the vote" to count it.`,
+    );
   }
   if (bill.status !== "debate") throw new HouseError(`${bill.title} is not in debate, so no vote can be called.`);
   // The Speaker cannot block a motion against themselves, so anyone may call that vote.

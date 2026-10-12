@@ -323,6 +323,7 @@ How to read what members say:
 - Use propose_bill only when the member clearly proposes a new rule ("I propose", "I move", "new rule", "let's make a law").
 - While a bill is before the House, opinions, arguments and suggestions about it ("I think", "we should", "I'd like to say") are debate: call add_debate_statement with their words.
 - A short "aye", "nay", "no", "yes", "abstain", "I vote for it" or "I'm against it" is a vote on the bill before the House: call cast_vote (yes means aye, no means nay).
+- "Call the vote" or "let's vote" opens voting: call_vote. "Close the vote", "count the votes", "end the vote" or "what's the result" counts it: close_vote. Never use call_vote when the vote is already open.
 - To change an existing law use propose_amendment; to scrap one use propose_repeal; both name the law by act number or title.
 - "Impeach the Speaker", "no confidence in the Speaker" and the like mean impeach_speaker. "State of the House" or "how did this week go" means state_of_the_house.
 When a tool result includes "spoken", base your reply on it and keep its facts (act names, numbers, dates, counts) exactly. If a tool fails, tell the member plainly what happened and what to do next.
